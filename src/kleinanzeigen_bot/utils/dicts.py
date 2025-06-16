@@ -12,10 +12,6 @@ from typing import Any, Final, TypeVar
 
 from ruamel.yaml import YAML
 
-from . import files, loggers  # pylint: disable=cyclic-import
-
-LOG:Final[loggers.Logger] = loggers.get_logger(__name__)
-
 # https://mypy.readthedocs.io/en/stable/generics.html#generic-functions
 K = TypeVar("K")
 V = TypeVar("V")

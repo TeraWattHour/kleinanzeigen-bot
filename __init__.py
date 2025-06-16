@@ -11,26 +11,15 @@ import certifi, colorama, nodriver  # isort: skip
 from ruamel.yaml import YAML
 from wcmatch import glob
 
+from kleinanzeigen_bot.utils.i18n import pluralize
+
 from . import extract, resources
-from ._version import __version__
-from .model.ad_model import MAX_DESCRIPTION_LENGTH, Ad, AdPartial
-from .model.config_model import Config
-from .utils import dicts, error_handlers, loggers, misc
-from .utils.exceptions import CaptchaEncountered
-from .utils.files import abspath
-from .utils.i18n import Locale, get_current_locale, pluralize, set_current_locale
-from .utils.misc import ainput, ensure, is_frozen
-from .utils.web_scraping_mixin import By, Element, Is, WebScrapingMixin
 
 # W0406: possibly a bug, see https://github.com/PyCQA/pylint/issues/3933
 
-LOG:Final[loggers.Logger] = loggers.get_logger(__name__)
-LOG.setLevel(loggers.INFO)
-
-colorama.just_fix_windows_console()
-
 
 class KleinanzeigenBot(WebScrapingMixin):
+    root_url: Final[str] = "https://www.kleinanzeigen.de"
 
     def __init__(self) -> None:
 
@@ -40,14 +29,12 @@ class KleinanzeigenBot(WebScrapingMixin):
 
         super().__init__()
 
-        self.root_url = "https://www.kleinanzeigen.de"
-
-        self.config:Config
+        self.config: Config
         self.config_file_path = abspath("config.yaml")
 
-        self.categories:dict[str, str] = {}
+        self.categories: dict[str, str] = {}
 
-        self.file_log:loggers.LogFileHandle | None = None
+        self.file_log: loggers.LogFileHandle | None = None
         log_file_basename = is_frozen() and os.path.splitext(os.path.basename(sys.executable))[0] or self.__module__
         self.log_file_path:str | None = abspath(f"{log_file_basename}.log")
 
@@ -68,10 +55,6 @@ class KleinanzeigenBot(WebScrapingMixin):
         self.parse_args(args)
         try:
             match self.command:
-                case "help":
-                    self.show_help()
-                case "version":
-                    print(self.get_version())
                 case "verify":
                     self.configure_file_logging()
                     self.load_config()
@@ -460,37 +443,19 @@ class KleinanzeigenBot(WebScrapingMixin):
         return AdPartial.model_validate(ad_cfg_orig).to_ad(self.config.ad_defaults)
 
     def load_config(self) -> None:
-        # write default config.yaml if config file does not exist
-        if not os.path.exists(self.config_file_path):
-            LOG.warning("Config file %s does not exist. Creating it with default values...", self.config_file_path)
-            default_config = Config.model_construct()
-            default_config.login.username = ""
-            default_config.login.password = ""
-            dicts.save_dict(self.config_file_path, default_config.model_dump(exclude_none = True, exclude = {
-                "ad_defaults": {
-                    "description"  # deprecated
-                }
-            }), header = "# yaml-language-server: $schema=https://raw.githubusercontent.com/Second-Hand-Friends/kleinanzeigen-bot/refs/heads/main/schemas/config.schema.json")
+        assert os.path.exists(self.config_file_path), f"Config file {self.config_file_path} does not exist"
 
-        config_yaml = dicts.load_dict_if_exists(self.config_file_path, _("config"))
-        self.config = Config.model_validate(config_yaml, strict = True, context = self.config_file_path)
-
+        with open(self.config_file_path, "r", encoding = "utf-8") as config_file:
+            config = json.load(config_file)
+            Config.model_validate_json(config, strict=True)
+       
         # load built-in category mappings
         self.categories = dicts.load_dict_from_module(resources, "categories.yaml", "categories")
-        deprecated_categories = dicts.load_dict_from_module(resources, "categories_old.yaml", "categories")
-        self.categories.update(deprecated_categories)
         if self.config.categories:
             self.categories.update(self.config.categories)
         LOG.info(" -> found %s", pluralize("category", self.categories))
 
-        # populate browser_config object used by WebScrapingMixin
-        self.browser_config.arguments = self.config.browser.arguments
-        self.browser_config.binary_location = self.config.browser.binary_location
-        self.browser_config.extensions = [abspath(item, relative_to = self.config_file_path) for item in self.config.browser.extensions]
-        self.browser_config.use_private_window = self.config.browser.use_private_window
-        if self.config.browser.user_data_dir:
-            self.browser_config.user_data_dir = abspath(self.config.browser.user_data_dir, relative_to = self.config_file_path)
-        self.browser_config.profile_name = self.config.browser.profile_name
+        self.browser_socket = self.config.browser_socket
 
     async def check_and_wait_for_captcha(self, *, is_login_page:bool = True) -> None:
         try:
@@ -512,124 +477,11 @@ class KleinanzeigenBot(WebScrapingMixin):
         except TimeoutError:
             pass
 
-    async def login(self) -> None:
-        LOG.info("Checking if already logged in...")
-        await self.web_open(f"{self.root_url}")
-
-        if await self.is_logged_in():
-            LOG.info("Already logged in as [%s]. Skipping login.", self.config.login.username)
-            return
-
-        LOG.info("Opening login page...")
-        await self.web_open(f"{self.root_url}/m-einloggen.html?targetUrl=/")
-
-        await self.fill_login_data_and_send()
-        await self.handle_after_login_logic()
-
-        # Sometimes a second login is required
-        if not await self.is_logged_in():
-            await self.fill_login_data_and_send()
-            await self.handle_after_login_logic()
-
-    async def fill_login_data_and_send(self) -> None:
-        LOG.info("Logging in as [%s]...", self.config.login.username)
-        await self.web_input(By.ID, "login-email", self.config.login.username)
-
-        # clearing password input in case browser has stored login data set
-        await self.web_input(By.ID, "login-password", "")
-        await self.web_input(By.ID, "login-password", self.config.login.password)
-
-        await self.check_and_wait_for_captcha(is_login_page = True)
-
-        await self.web_click(By.CSS_SELECTOR, "form#login-form button[type='submit']")
-
-    async def handle_after_login_logic(self) -> None:
-        try:
-            await self.web_find(By.TEXT, "Wir haben dir gerade einen 6-stelligen Code für die Telefonnummer", timeout = 4)
-            LOG.warning("############################################")
-            LOG.warning("# Device verification message detected. Please follow the instruction displayed in the Browser.")
-            LOG.warning("############################################")
-            await ainput("Press ENTER when done...")
-        except TimeoutError:
-            pass
-
-        try:
-            LOG.info("Handling GDPR disclaimer...")
-            await self.web_find(By.ID, "gdpr-banner-accept", timeout = 10)
-            await self.web_click(By.ID, "gdpr-banner-cmp-button")
-            await self.web_click(By.XPATH, "//div[@id='ConsentManagementPage']//*//button//*[contains(., 'Alle ablehnen und fortfahren')]", timeout = 10)
-        except TimeoutError:
-            pass
-
-    async def is_logged_in(self) -> bool:
-        try:
-            # Try to find the standard element first
-            user_info = await self.web_text(By.CLASS_NAME, "mr-medium")
-            if self.config.login.username.lower() in user_info.lower():
-                return True
-        except TimeoutError:
-            try:
-                # If standard element not found, try the alternative
-                user_info = await self.web_text(By.ID, "user-email")
-                if self.config.login.username.lower() in user_info.lower():
-                    return True
-            except TimeoutError:
-                return False
-        return False
-
-    async def delete_ads(self, ad_cfgs:list[tuple[str, Ad, dict[str, Any]]]) -> None:
-        count = 0
-
-        published_ads = json.loads(
-            (await self.web_request(f"{self.root_url}/m-meine-anzeigen-verwalten.json?sort=DEFAULT"))["content"])["ads"]
-
-        for (ad_file, ad_cfg, _ad_cfg_orig) in ad_cfgs:
-            count += 1
-            LOG.info("Processing %s/%s: '%s' from [%s]...", count, len(ad_cfgs), ad_cfg.title, ad_file)
-            await self.delete_ad(ad_cfg, published_ads, delete_old_ads_by_title = self.config.publishing.delete_old_ads_by_title)
-            await self.web_sleep()
-
-        LOG.info("############################################")
-        LOG.info("DONE: Deleted %s", pluralize("ad", count))
-        LOG.info("############################################")
-
-    async def delete_ad(self, ad_cfg:Ad, published_ads:list[dict[str, Any]], *, delete_old_ads_by_title:bool) -> bool:
-        LOG.info("Deleting ad '%s' if already present...", ad_cfg.title)
-
-        await self.web_open(f"{self.root_url}/m-meine-anzeigen.html")
-        csrf_token_elem = await self.web_find(By.CSS_SELECTOR, "meta[name=_csrf]")
-        csrf_token = csrf_token_elem.attrs["content"]
-        ensure(csrf_token is not None, "Expected CSRF Token not found in HTML content!")
-
-        if delete_old_ads_by_title:
-
-            for published_ad in published_ads:
-                published_ad_id = int(published_ad.get("id", -1))
-                published_ad_title = published_ad.get("title", "")
-                if ad_cfg.id == published_ad_id or ad_cfg.title == published_ad_title:
-                    LOG.info(" -> deleting %s '%s'...", published_ad_id, published_ad_title)
-                    await self.web_request(
-                        url = f"{self.root_url}/m-anzeigen-loeschen.json?ids={published_ad_id}",
-                        method = "POST",
-                        headers = {"x-csrf-token": csrf_token}
-                    )
-        elif ad_cfg.id:
-            await self.web_request(
-                url = f"{self.root_url}/m-anzeigen-loeschen.json?ids={ad_cfg.id}",
-                method = "POST",
-                headers = {"x-csrf-token": csrf_token},
-                valid_response_codes = [200, 404]
-            )
-
-        await self.web_sleep()
-        ad_cfg.id = None
-        return True
-
     async def publish_ads(self, ad_cfgs:list[tuple[str, Ad, dict[str, Any]]]) -> None:
         count = 0
 
         published_ads = json.loads(
-            (await self.web_request(f"{self.root_url}/m-meine-anzeigen-verwalten.json?sort=DEFAULT"))["content"])["ads"]
+            (await self.fetch(f"{self.root_url}/m-meine-anzeigen-verwalten.json?sort=DEFAULT"))["content"])["ads"]
 
         for (ad_file, ad_cfg, ad_cfg_orig) in ad_cfgs:
             LOG.info("Processing %s/%s: '%s' from [%s]...", count + 1, len(ad_cfgs), ad_cfg.title, ad_file)
@@ -1160,60 +1012,3 @@ class KleinanzeigenBot(WebScrapingMixin):
 
         return final_description
 
-    def update_content_hashes(self, ads:list[tuple[str, Ad, dict[str, Any]]]) -> None:
-        count = 0
-
-        for (ad_file, ad_cfg, ad_cfg_orig) in ads:
-            LOG.info("Processing %s/%s: '%s' from [%s]...", count + 1, len(ads), ad_cfg.title, ad_file)
-            ad_cfg.update_content_hash()
-            if ad_cfg.content_hash != ad_cfg_orig["content_hash"]:
-                count += 1
-                ad_cfg_orig["content_hash"] = ad_cfg.content_hash
-                dicts.save_dict(ad_file, ad_cfg_orig)
-
-        LOG.info("############################################")
-        LOG.info("DONE: Updated [content_hash] in %s", pluralize("ad", count))
-        LOG.info("############################################")
-
-#############################
-# main entry point
-#############################
-
-
-def main(args:list[str]) -> None:
-    if "version" not in args:
-        print(textwrap.dedent(r"""
-         _    _      _                           _                       _           _
-        | | _| | ___(_)_ __   __ _ _ __  _______(_) __ _  ___ _ __      | |__   ___ | |_
-        | |/ / |/ _ \ | '_ \ / _` | '_ \|_  / _ \ |/ _` |/ _ \ '_ \ ____| '_ \ / _ \| __|
-        |   <| |  __/ | | | | (_| | | | |/ /  __/ | (_| |  __/ | | |____| |_) | (_) | |_
-        |_|\_\_|\___|_|_| |_|\__,_|_| |_/___\___|_|\__, |\___|_| |_|    |_.__/ \___/ \__|
-                                                   |___/
-                                 https://github.com/Second-Hand-Friends/kleinanzeigen-bot
-        """)[1:], flush = True)  # [1:] removes the first empty blank line
-
-    loggers.configure_console_logging()
-
-    signal.signal(signal.SIGINT, error_handlers.on_sigint)  # capture CTRL+C
-
-    # sys.excepthook = error_handlers.on_exception
-    # -> commented out because it causes PyInstaller to log "[PYI-28040:ERROR] Failed to execute script '__main__' due to unhandled exception!",
-    #    despite the exceptions being properly processed by our custom error_handlers.on_exception callback.
-    #    We now handle exceptions explicitly using a top-level try/except block.
-
-    atexit.register(loggers.flush_all_handlers)
-
-    try:
-        bot = KleinanzeigenBot()
-        atexit.register(bot.close_browser_session)
-        nodriver.loop().run_until_complete(bot.run(args))
-    except CaptchaEncountered as ex:
-        raise ex
-    except Exception:
-        error_handlers.on_exception(*sys.exc_info())
-
-
-if __name__ == "__main__":
-    loggers.configure_console_logging()
-    LOG.error("Direct execution not supported. Use 'pdm run app'")
-    sys.exit(1)

@@ -43,3 +43,5 @@ __pycache__
 # Vim
 *.swo
 *.swp
+
+config.json

@@ -55,93 +55,29 @@ class AdDefaults(ContextualModel):
             values["description_suffix"] = legacy_suffix
         return values
 
-
-class DownloadConfig(ContextualModel):
-    include_all_matching_shipping_options:bool = Field(
-        default = False,
-        description = "if true, all shipping options matching the package size will be included"
-    )
-    excluded_shipping_options:List[str] = Field(
-        default_factory = list,
-        description = "list of shipping options to exclude, e.g. ['DHL_2', 'DHL_5']"
-    )
-
-
-class BrowserConfig(ContextualModel):
-    arguments:List[str] = Field(
-        default_factory = list,
-        description = "See https://peter.sh/experiments/chromium-command-line-switches/"
-    )
-    binary_location:str | None = Field(
-        default = None,
-        description = "path to custom browser executable, if not specified will be looked up on PATH"
-    )
-    extensions:List[str] = Field(
-        default_factory = list,
-        description = "a list of .crx extension files to be loaded"
-    )
-    use_private_window:bool = True
-    user_data_dir:str | None = Field(
-        default = None,
-        description = "See https://github.com/chromium/chromium/blob/main/docs/user_data_dir.md"
-    )
-    profile_name:str | None = None
-
-
-class LoginConfig(ContextualModel):
-    username:str = Field(..., min_length = 1)
-    password:str = Field(..., min_length = 1)
-
-
 class PublishingConfig(ContextualModel):
     delete_old_ads:Literal["BEFORE_PUBLISH", "AFTER_PUBLISH", "NEVER"] | None = "AFTER_PUBLISH"
     delete_old_ads_by_title:bool = Field(default = True, description = "only works if delete_old_ads is set to BEFORE_PUBLISH")
 
-
-class CaptchaConfig(ContextualModel):
-    auto_restart:bool = False
-    restart_delay:str = "6h"
-
-
-def _validate_glob_pattern(v:str) -> str:
-    if not v.strip():
-        raise ValueError("must be a non-empty, non-blank glob pattern")
-    return v
-
-
-GlobPattern = Annotated[str, AfterValidator(_validate_glob_pattern)]
-
-
 class Config(ContextualModel):
-    ad_files:List[GlobPattern] = Field(
-        default_factory = lambda: ["./**/ad_*.{json,yml,yaml}"],
-        min_items = 1,
-        description = """
-glob (wildcard) patterns to select ad configuration files
-if relative paths are specified, then they are relative to this configuration file
-"""
-    )  # type: ignore[call-overload]
+    ad_files: List[str] = Field(
+        default=["./**/ad_*.{json,yml,yaml}"],
+        min_items=1,
+    ) # type: ignore
 
-    ad_defaults:AdDefaults = Field(
+    ad_defaults: AdDefaults = Field(
         default_factory = AdDefaults,
         description = "Default values for ads, can be overwritten in each ad configuration file"
     )
 
-    categories:dict[str, str] = Field(default_factory = dict, description = """
+    categories: dict[str, str] = Field(default_factory = dict, description = """
 additional name to category ID mappings, see default list at
-https://github.com/Second-Hand-Friends/kleinanzeigen-bot/blob/main/src/kleinanzeigen_bot/resources/categories.yaml
+https://github.com/TeraWattHour/kleinanzeigen-bot/blob/main/src/kleinanzeigen_bot/resources/categories.json
+""")
 
-Example:
-    categories:
-       Elektronik > Notebooks: 161/278
-       Jobs > Praktika: 102/125
-    """)
-
-    download:DownloadConfig = Field(default_factory = DownloadConfig)
-    publishing:PublishingConfig = Field(default_factory = PublishingConfig)
-    browser:BrowserConfig = Field(default_factory = BrowserConfig, description = "Browser configuration")
-    login:LoginConfig = Field(default_factory = LoginConfig.model_construct, description = "Login credentials")
-    captcha:CaptchaConfig = Field(default_factory = CaptchaConfig)
+    publishing: PublishingConfig = Field(default_factory = PublishingConfig)
+    browser_socket: str = Field(default="127.0.0.1:9222", description="remote debugging socket address to bind to, e.g. '127.0.0.1:9222'")
+    username: str
 
     def with_values(self, values:dict[str, Any]) -> Config:
         return Config.model_validate(

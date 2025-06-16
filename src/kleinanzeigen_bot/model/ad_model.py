@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib, json  # isort: skip
 from datetime import datetime  # noqa: TC003 Move import into a type-checking block
-from typing import Annotated, Any, Dict, Final, List, Literal, Mapping, Sequence
+from typing import Annotated, Any, Dict, Final, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import AfterValidator, Field, field_validator, model_validator
 from typing_extensions import Self
@@ -15,12 +15,10 @@ from kleinanzeigen_bot.utils import dicts
 from kleinanzeigen_bot.utils.misc import parse_datetime, parse_decimal
 from kleinanzeigen_bot.utils.pydantics import ContextualModel
 
-MAX_DESCRIPTION_LENGTH:Final[int] = 4000
-
+MAX_DESCRIPTION_LENGTH: Final[int] = 4000
 
 def _OPTIONAL() -> Any:
     return Field(default = None)
-
 
 def _ISO_DATETIME(default:datetime | None = None) -> Any:
     return Field(
@@ -43,15 +41,6 @@ def _ISO_DATETIME(default:datetime | None = None) -> Any:
     )
 
 
-class ContactPartial(ContextualModel):
-    name:str | None = _OPTIONAL()
-    street:str | None = _OPTIONAL()
-    zipcode:int | str | None = _OPTIONAL()
-    location:str | None = _OPTIONAL()
-
-    phone:str | None = _OPTIONAL()
-
-
 def _validate_shipping_option_item(v:str) -> str:
     if not v.strip():
         raise ValueError("must be non-empty and non-blank")
@@ -62,12 +51,12 @@ ShippingOption = Annotated[str, AfterValidator(_validate_shipping_option_item)]
 
 
 class AdPartial(ContextualModel):
-    active:bool | None = _OPTIONAL()
-    type:Literal["OFFER", "WANTED"] | None = _OPTIONAL()
-    title:str = Field(..., min_length = 10)
-    description:str
-    description_prefix:str | None = _OPTIONAL()
-    description_suffix:str | None = _OPTIONAL()
+    active: bool | None = _OPTIONAL()
+    type: Literal["OFFER", "WANTED"] | None = _OPTIONAL()
+    title: str = Field(..., min_length = 10)
+    description: str
+    description_prefix: str | None = _OPTIONAL()
+    description_suffix: str | None = _OPTIONAL()
     category:str
     special_attributes:Dict[str, str] | None = _OPTIONAL()
     price:int | None = _OPTIONAL()
@@ -77,7 +66,6 @@ class AdPartial(ContextualModel):
     shipping_options:List[ShippingOption] | None = _OPTIONAL()
     sell_directly:bool | None = _OPTIONAL()
     images:List[str] | None = _OPTIONAL()
-    contact:ContactPartial | None = _OPTIONAL()
     republication_interval:int | None = _OPTIONAL()
 
     id:int | None = _OPTIONAL()
@@ -149,7 +137,7 @@ class AdPartial(ContextualModel):
         self.content_hash = hashlib.sha256(json_string.encode()).hexdigest()
         return self
 
-    def to_ad(self, ad_defaults:AdDefaults) -> Ad:
+    def to_ad(self, ad_defaults: AdDefaults) -> Ad:
         """
         Returns a complete, validated Ad by merging this partial with values from ad_defaults.
 
@@ -165,21 +153,12 @@ class AdPartial(ContextualModel):
             override = lambda _, v: not isinstance(v, list) and v in {None, ""}  # noqa: PLC1901 can be simplified
         )
         return Ad.model_validate(ad_cfg)
-
-
-# pyright: reportGeneralTypeIssues=false, reportIncompatibleVariableOverride=false
-class Contact(ContactPartial):
-    name:str
-    zipcode:int | str
-
+    
 
 # pyright: reportGeneralTypeIssues=false, reportIncompatibleVariableOverride=false
 class Ad(AdPartial):
-    active:bool
-    type:Literal["OFFER", "WANTED"]
-    description:str
-    price_type:Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"]
-    shipping_type:Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"]
-    sell_directly:bool
-    contact:Contact
-    republication_interval:int
+    description: str
+    price_type: Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"]
+    shipping_type: Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"]
+    sell_directly: bool
+    republication_interval: int
