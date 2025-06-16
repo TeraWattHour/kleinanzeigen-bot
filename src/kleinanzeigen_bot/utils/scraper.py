@@ -6,7 +6,6 @@ from collections.abc import Callable, Coroutine, Iterable
 from gettext import gettext as _
 from typing import Any, Final, Optional, cast
 
-from kleinanzeigen_bot.model.config_model import BrowserConfig
 from typing import Never
 
 import nodriver
@@ -20,7 +19,6 @@ from .misc import T, ainput, ensure
 
 __all__ = [
     "Browser",
-    "BrowserConfig",
     "By",
     "Element",
     "Page",
@@ -60,12 +58,6 @@ async def create_browser_session(browser_socket: str) -> Browser:
 class Scraper:
     def __init__(self, page: nodriver.Tab) -> None:
         self.page = page
-
-    async def goto(self):
-        self.page.aopen()
-        self.page = await self.browser.get(url = url, new_tab = False, new_window = False)
-        await self.web_await(lambda: self.web_execute("document.readyState == 'complete'"), timeout = timeout,
-                timeout_error_message = f"Page did not finish loading within {timeout} seconds.")
 
     async def check_logged_in(self, username: str):
         try:

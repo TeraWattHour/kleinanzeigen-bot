@@ -57,7 +57,7 @@ class AdPartial(ContextualModel):
     description: str
     description_prefix: str | None = _OPTIONAL()
     description_suffix: str | None = _OPTIONAL()
-    category:str
+    category:str |None= _OPTIONAL()
     special_attributes:Dict[str, str] | None = _OPTIONAL()
     price:int | None = _OPTIONAL()
     price_type:Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"] | None = _OPTIONAL()

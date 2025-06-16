@@ -13,39 +13,11 @@ def create_parser():
         default='./config.json',
         help='Path to the config JSON file (DEFAULT: ./config.json)'
     )
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Enables verbose output - only useful when troubleshooting issues'
-    )
 
     subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
 
     # publish
-    publish_parser = subparsers.add_parser('publish', help='(re-)publishes ads')
-    publish_parser.add_argument(
-        '--ads',
-        default='due',
-        help=(
-            "Specifies which ads to (re-)publish (DEFAULT: due)\n"
-            "* all: (re-)publish all ads ignoring republication_interval\n"
-            "* due: publish new and due ads\n"
-            "* new: only publish new ads\n"
-            "* changed: only publish modified ads\n"
-            "* <id(s)>: e.g. --ads=1,2,3\n"
-            "* Combinations: --ads=changed,due"
-        )
-    )
-    publish_parser.add_argument(
-        '--force',
-        action='store_true',
-        help="Alias for '--ads=all'"
-    )
-    publish_parser.add_argument(
-        '--keep-old',
-        action='store_true',
-        help="Don't delete old ads on republication"
-    )
+    subparsers.add_parser('publish', help='publishes ads')
 
     # verify
     subparsers.add_parser('verify', help='Verifies the configuration files')

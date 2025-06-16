@@ -33,8 +33,8 @@ def load_ad(path: str) -> AdPartial:
         return AdPartial.model_validate(data)
 
 async def publish_ads(config: Config):
-    ads = [load_ad(file) for match in config.ad_files for file in glob.glob(match)]
-    if len(ads) == 0:
+    ad_files = [file for match in config.ad_files for file in glob.glob(match)]
+    if len(ad_files) == 0:
         print("no ad files found")
         return
 
@@ -43,36 +43,47 @@ async def publish_ads(config: Config):
     scraper = Scraper(tab)
     await scraper.ensure_logged_in(config.username)
 
-    for ad in ads:
+    published_ads = await get_all_published_ads(scraper)
+    published_ids = list(map(lambda ad: int(ad['id']), published_ads))
+
+    for file in ad_files:
+        ad = load_ad(file)
+        if ad.id is not None and ad.id in published_ids:
+            print(f"skipping ad {ad.id} - already processed")
+            continue
+
         tab = await browser.get(f"{URL}/p-anzeige-aufgeben-schritt2.html", new_tab=True)
         try:
-            await publish_ad(tab, ad.to_ad(config.ad_defaults))
+            id = await publish_ad(tab, ad.to_ad(config.ad_defaults), file)
+            with open(file, 'w') as f:
+                ad.id = id
+                f.write(ad.model_dump_json())
+
+            print("ad published with id:", id)
         except Exception as e:
             print(e)
         await tab.close()
         
-    # published_ads = await get_all_published_ads(scraper)
-    # published_ids = list(map(lambda ad: ad['id'], published_ads))
+   
 
-
-async def publish_ad(tab: Tab, ad: Ad):
+async def publish_ad(tab: Tab, ad: Ad, file_path: str):
     scraper = Scraper(tab)
 
     await scraper.web_input(By.ID, "postad-title", ad.title)
-    
-    await __set_special_attributes(scraper, ad)
     
     await scraper.web_input(By.CSS_SELECTOR, "input#post-ad-frontend-price, input#micro-frontend-price, input#pstad-price", str(ad.price))
     await scraper.web_select(By.ID, "micro-frontend-price-type", "NEGOTIABLE")
     await scraper.web_sleep()
     
+    # shipping MUST be bellow the inputs since it relies on automatic category assignment based on the title
+    # which is only triggered after some interaction with the site, in this case price change
     await __set_shipping(scraper, ad)
 
-    # set description
     await scraper.web_execute("document.querySelector('#pstad-descrptn').value = `" + ad.description.replace("`", "'") + "`")
     
-    await __upload_images(scraper, ad)
-    await scraper.web_sleep()
+    await __upload_images(scraper, ad, file_path)
+
+    await scraper.web_scroll_page_down()
 
     await scraper.detect_captcha()
 
@@ -107,35 +118,6 @@ async def publish_ad(tab: Tab, ad: Ad):
 
     return ad_id
 
-async def __set_condition(scraper: Scraper, condition_value:str) -> None:
-    condition_mapping = {
-        "new_with_tag": "Neu mit Etikett",
-        "new": "Neu",
-        "like_new": "Sehr Gut",
-        "ok": "Gut",
-        "alright": "In Ordnung",
-        "defect": "Defekt",
-    }
-    mapped_condition = condition_mapping.get(condition_value)
-
-    try:
-        await scraper.web_click(By.XPATH, '//*[contains(@id, "j-post-listing-frontend-conditions")]//button[contains(., "Bitte wählen")]')
-    except TimeoutError:
-        print("Unable to open condition dialog and select condition [%s]", condition_value)
-        return
-
-    try:
-        # Click radio button
-        await scraper.web_click(By.CSS_SELECTOR, f'.SingleSelectionItem--Main input[type=radio][data-testid="{mapped_condition}"]')
-    except TimeoutError:
-        print("Unable to select condition [%s]", condition_value)
-
-    try:
-        # Click accept button
-        await scraper.web_click(By.XPATH, '//*[contains(@id, "j-post-listing-frontend-conditions")]//dialog//button[contains(., "Bestätigen")]')
-    except TimeoutError as ex:
-        raise TimeoutError("Unable to close condition dialog!") from ex
-
 async def __set_category(scraper: Scraper) -> None:
     await scraper.web_click(By.ID, "pstad-descrptn")
 
@@ -144,50 +126,6 @@ async def __set_category(scraper: Scraper) -> None:
     except TimeoutError:
         raise Exception("unimplemented; manual category picker")
 
-async def __set_special_attributes(scraper: Scraper, ad_cfg: Ad) -> None:
-    if not ad_cfg.special_attributes:
-        return
-
-    for special_attribute_key, special_attribute_value in ad_cfg.special_attributes.items():
-
-        if special_attribute_key == "condition_s":
-            await __set_condition(scraper, special_attribute_value)
-            continue
-        
-        print("Setting special attribute [%s] to [%s]..." % special_attribute_key, special_attribute_value)
-        try:
-            # if the <select> element exists but is inside an invisible container, make the container visible
-            select_container_xpath = f"//div[@class='l-row' and descendant::select[@id='{special_attribute_key}']]"
-            if not await scraper.web_check(By.XPATH, select_container_xpath, Is.DISPLAYED):
-                await (await scraper.web_find(By.XPATH, select_container_xpath)).apply("elem => elem.singleNodeValue.style.display = 'block'")
-        except TimeoutError:
-            pass  # nosec
-
-        try:
-            # finding element by name cause id are composed sometimes eg. autos.marke_s+autos.model_s for Modell by cars
-            special_attr_elem = await scraper.web_find(By.XPATH, f"//*[contains(@name, '{special_attribute_key}')]")
-        except TimeoutError as ex:
-            print("Attribute field '%s' could not be found." % special_attribute_key)
-            raise TimeoutError(f"Failed to set special attribute [{special_attribute_key}] (not found)") from ex
-
-        try:
-            elem_id = special_attr_elem.attrs.id
-            if special_attr_elem.local_name == "select":
-                print("Attribute field '%s' seems to be a select..." % special_attribute_key)
-                await scraper.web_select(By.ID, elem_id, special_attribute_value)
-            elif special_attr_elem.attrs.type == "checkbox":
-                print("Attribute field '%s' seems to be a checkbox..." % special_attribute_key)
-                await scraper.web_click(By.ID, elem_id)
-            else:
-                print("Attribute field '%s' seems to be a text input..." % special_attribute_key)
-                await scraper.web_input(By.ID, elem_id, special_attribute_value)
-        except TimeoutError as ex:
-            print("Attribute field '%s' is not of kind radio button." % special_attribute_key)
-            raise TimeoutError(f"Failed to set special attribute [{special_attribute_key}]") from ex
-        print("Successfully set attribute field [%s] to [%s]..." % special_attribute_key, special_attribute_value)
-
-        print("unimplemented; special attributes")
-        
 async def __set_shipping(scraper: Scraper, ad_cfg:Ad) -> None:
     if ad_cfg.shipping_type == "PICKUP":
         try:
@@ -279,9 +217,15 @@ async def __set_shipping_options(scraper: Scraper, ad_cfg:Ad) -> None:
     except TimeoutError as ex:
         raise TimeoutError("Unable to close shipping dialog!") from ex
 
-async def __upload_images(scraper: Scraper, ad_cfg:Ad) -> None:
+
+def resolve_relative_path(base_file_path: str, relative_path: str) -> str:
+    base_dir = os.path.dirname(os.path.abspath(base_file_path))
+    return os.path.abspath(os.path.join(base_dir, relative_path))
+
+async def __upload_images(scraper: Scraper, ad_cfg: Ad, file_path: str) -> None:
     if not ad_cfg.images:
         return
 
     image_upload: Element = await scraper.web_find(By.CSS_SELECTOR, "input[type=file]")
-    await image_upload.send_file(*ad_cfg.images)
+    await image_upload.send_file(*map(lambda image: resolve_relative_path(file_path, image), ad_cfg.images))
+    await scraper.web_sleep()
