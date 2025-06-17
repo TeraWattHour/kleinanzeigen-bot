@@ -6,7 +6,8 @@ import copy
 from typing import Any, List, Literal
 from pydantic import Field
 
-from kleinanzeigen_bot.model.ad_model import OPTIONAL, ShippingOption
+from kleinanzeigen_bot.model import OPTIONAL
+# from kleinanzeigen_bot.model.ad_model import ShippingOption
 from kleinanzeigen_bot.utils import dicts
 from kleinanzeigen_bot.utils.pydantics import ContextualModel
 
@@ -16,8 +17,8 @@ class AdDefaults(ContextualModel):
     
     category: str | None = OPTIONAL()
     special_attributes: dict[str, str] | None = OPTIONAL()
-    shipping_costs: float | None = OPTIONAL()
-    shipping_options: List[ShippingOption] | None = OPTIONAL()
+    # shipping_costs: float | None = OPTIONAL()
+    # shipping_options: List[ShippingOption] | None = OPTIONAL()
     sell_directly: bool | None = OPTIONAL()
     
 class Config(ContextualModel):

@@ -10,13 +10,12 @@ from typing import Annotated, Any, Dict, Final, List, Literal, Mapping, Optional
 from pydantic import AfterValidator, Field, field_validator, model_validator
 from typing_extensions import Self
 
+from kleinanzeigen_bot.model import OPTIONAL
 from kleinanzeigen_bot.model.config_model import AdDefaults  # noqa: TC001 Move application import into a type-checking block
 from kleinanzeigen_bot.utils import dicts
 from kleinanzeigen_bot.utils.misc import parse_datetime, parse_decimal
 from kleinanzeigen_bot.utils.pydantics import ContextualModel
 
-def OPTIONAL():
-    return Field(default = None)
 
 def _ISO_DATETIME(default:datetime | None = None) -> Any:
     return Field(
@@ -47,7 +46,7 @@ ShippingOption = Annotated[str, AfterValidator(_validate_shipping_option_item)]
 
 
 class AdPartial(ContextualModel):
-    title: str = Field(..., min_length=10, max_length=65)
+    title: str = Field(..., min_length=10)
     description: str = Field(..., max_length=4000)
     images: List[str]
     price: int

@@ -76,7 +76,7 @@ async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
     
     await scraper.input(By.CSS_SELECTOR, "input#post-ad-frontend-price, input#micro-frontend-price, input#pstad-price", str(ad.price))
     await scraper.web_select(By.CSS_SELECTOR, "#micro-frontend-price-type", "NEGOTIABLE")
-
+    
     await __set_category(scraper, "210/223/ersatz_reparaturteile")
     await __set_shipping(scraper, ad)
 
@@ -87,10 +87,13 @@ async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
     await scraper.detect_captcha()
 
     try:
-        submit_button = await scraper.query(By.CSS_SELECTOR, "#pstad-submit")
-        await submit_button.scroll_into_view()
-        await scraper.sleep(500, 1000)
-        await submit_button.click()
+        print("trying to submit")
+        await scraper.click(By.CSS_SELECTOR, "#pstad-submit")
+        # submit_button = await scraper.query()
+        print("found submit button")
+        # await submit_button.scroll_into_view()
+        # await scraper.sleep(500, 1000)
+        # await submit_button.click()
     except TimeoutError:
         # https://github.com/Second-Hand-Friends/kleinanzeigen-bot/issues/40
         await scraper.click(By.XPATH, "//fieldset[@id='postad-publish']//*[contains(., 'Anzeige aufgeben')]")
@@ -104,7 +107,7 @@ async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
     except TimeoutError:
         pass
 
-    await scraper.wait_for(lambda: "p-anzeige-aufgeben-bestaetigung.html?adId=" in scraper.page.url, timeout = 20)
+    await scraper.wait_for(lambda: check_if_successfully_submitted(scraper), timeout = 30)
 
     # extract the ad id from the URL's query parameter
     current_url_query_params = urllib.parse.parse_qs(urllib.parse.urlparse(scraper.page.url).query)
@@ -119,6 +122,12 @@ async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
         pass 
 
     return ad_id
+
+def check_if_successfully_submitted(scraper: Scraper):
+    print(" - current url:", scraper.page.url)
+    if "p-anzeige-aufgeben-bestaetigung.html?adId=" in scraper.page.url:
+        return True
+    return False
 
 async def __set_category(scraper: Scraper, category: str) -> None:
     await scraper.click(By.CSS_SELECTOR, "#pstad-descrptn")

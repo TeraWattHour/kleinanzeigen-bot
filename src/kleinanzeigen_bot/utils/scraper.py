@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © Sebastian Thomschke and contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-ArtifactOfProjectHomePage: https://github.com/Second-Hand-Friends/kleinanzeigen-bot/
+import inspect
 import asyncio, enum, secrets
 from collections.abc import Callable, Iterable
 from gettext import gettext as _
 from types import CoroutineType
-from typing import Any, Final, TypeVar, Union, cast
+from typing import Any, Awaitable, Coroutine, Final, Never, TypeVar, Union, cast
+from functools import partial
 
 import nodriver
 from nodriver.core.browser import Browser
@@ -88,29 +90,28 @@ class Scraper:
 
     async def wait_for(
         self, 
-        condition: Union[
-            Callable[[], Union[T, None]],
-            CoroutineType[Any, Any, Union[T, None]]
-        ], 
+        condition: Callable[[], T | Never | Coroutine[Any, Any, T | None | Never]],
         timeout: int | float = 5,
         timeout_msg: str = "timed out"
     ) -> T:
-        async def _poll() -> T:
-            while True:
-                if asyncio.iscoroutine(condition):
-                    result = await condition
-                else:
-                    result = condition()
+        loop = asyncio.get_running_loop()
+        start_at = loop.time()
 
-                if result is not None and result:
-                    return result # type: ignore
-                
-                await asyncio.sleep(0.05)
-
-        try:
-            return await asyncio.wait_for(_poll(), timeout=timeout)
-        except TimeoutError:
-            raise TimeoutError(timeout_msg)
+        while True:
+            await self.page
+            ex: Exception | None = None
+            try:
+                result_raw = condition()
+                result: T = cast(T, await result_raw if inspect.isawaitable(result_raw) else result_raw)
+                if result:
+                    return result
+            except Exception as ex1:
+                ex = ex1
+            if loop.time() - start_at > timeout:
+                if ex:
+                    raise ex
+                raise TimeoutError(timeout_msg or f"Condition not met within {timeout} seconds")
+            await self.page.sleep(0.5)
 
     async def web_check(self, by: By, selector: str, attr: Is, *, timeout: Timeout = 5) -> bool:
         def is_disabled(elem: Element) -> bool:
@@ -162,19 +163,18 @@ class Scraper:
         return await self.page.evaluate(code, await_promise=True, return_by_value=True)
     
     async def query(self, by: By, selector: str, parent: Element | None = None, *, timeout: Timeout = 5) -> Element:
-        closure: CoroutineType[Any, Any, Union[Element, None]]
         match by:
-            case By.CSS_SELECTOR: closure = self.page.query_selector(selector, parent) # type: ignore
-            case By.XPATH, By.TEXT: closure = self.page.find_element_by_text(selector, best_match=True) # type: ignore
+            case By.CSS_SELECTOR: closure = partial(self.page.query_selector, selector, parent)
+            case By.XPATH | By.TEXT: closure = partial(self.page.find_element_by_text, selector, best_match=True) 
             case _: raise Exception("unreachable; unknown selector")
 
-        return await self.wait_for(closure, timeout, timeout_msg=f"couldn't find anything matching `{selector}`")
+        return await self.wait_for(closure, timeout, timeout_msg=f"couldn't find anything matching `{selector}`") # type: ignore
 
     async def query_all(self, selector_type:By, selector:str, *, parent:Element | None = None, timeout: Timeout = 5) -> list[Element]:
-        closure: CoroutineType[Any, Any, list[Element]]
+        closure: partial[CoroutineType[Any, Any, list[Element]]]
         match selector_type:
-            case By.CSS_SELECTOR: closure = self.page.query_selector_all(selector, parent)
-            case By.XPATH, By.TEXT: closure = self.page.find_elements_by_text(selector, best_match=True)
+            case By.CSS_SELECTOR: closure = partial(self.page.query_selector_all, selector, parent)
+            case By.XPATH | By.TEXT: closure = partial(self.page.find_elements_by_text, selector)
             case _: raise Exception("unreachable; unknown selector")
 
         return await self.wait_for(closure, timeout)
