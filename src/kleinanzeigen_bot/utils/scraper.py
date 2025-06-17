@@ -26,9 +26,6 @@ __all__ = [
 ]
 
 
-# see https://api.jquery.com/category/selectors/
-METACHAR_ESCAPER: Final[dict[int, str]] = str.maketrans({ch: f"\\{ch}" for ch in '!"#$%&\'()*+,./:;<=>?@[\\]^`{|}~'})
-
 T = TypeVar("T", bound=object)
 type Timeout = int | float
 
@@ -36,7 +33,6 @@ class By(enum.Enum):
     CSS_SELECTOR = enum.auto()
     TEXT = enum.auto()
     XPATH = enum.auto()
-
 
 class Is(enum.Enum):
     CLICKABLE = enum.auto()
@@ -79,13 +75,12 @@ class Scraper:
         
     async def detect_captcha(self) -> None:
         try:
-            await self.query(By.CSS_SELECTOR, "iframe[name^='a-'][src^='https://www.google.com/recaptcha/api2/anchor?']", timeout = 2)
+            captcha = await self.query(By.CSS_SELECTOR, "iframe[name^='a-'][src^='https://www.google.com/recaptcha/api2/anchor?']", timeout = 2)
+            await captcha.scroll_into_view()
 
             print("############################################")
             print("# Captcha present! Please solve the captcha.")
             print("############################################")
-
-            await self.web_scroll_page_down()
 
             await ainput(_("Press a key to continue..."))
         except TimeoutError:
@@ -107,7 +102,7 @@ class Scraper:
                 else:
                     result = condition()
 
-                if result is not None:
+                if result is not None and result:
                     return result # type: ignore
                 
                 await asyncio.sleep(0.05)
@@ -146,7 +141,7 @@ class Scraper:
                 return elem.attrs.get("readonly") is not None
             case Is.SELECTED:
                 return cast(bool, await elem.apply("""
-                    function (element) {
+                    (element) => {
                         if (element.tagName.toLowerCase() === 'input') {
                             if (element.type === 'checkbox' || element.type === 'radio') {
                                 return element.checked
@@ -173,7 +168,7 @@ class Scraper:
             case By.XPATH, By.TEXT: closure = self.page.find_element_by_text(selector, best_match=True) # type: ignore
             case _: raise Exception("unreachable; unknown selector")
 
-        return await self.wait_for(closure, timeout)
+        return await self.wait_for(closure, timeout, timeout_msg=f"couldn't find anything matching `{selector}`")
 
     async def query_all(self, selector_type:By, selector:str, *, parent:Element | None = None, timeout: Timeout = 5) -> list[Element]:
         closure: CoroutineType[Any, Any, list[Element]]
@@ -230,27 +225,6 @@ class Scraper:
 
         return response["data"]
 
-    async def web_scroll_page_down(self, scroll_length:int = 10, scroll_speed:int = 10_000, *, scroll_back_top:bool = False) -> None:
-        """
-        Smoothly scrolls the current web page down.
-
-        :param scroll_length: the length of a single scroll iteration, determines smoothness of scrolling, lower is smoother
-        :param scroll_speed: the speed of scrolling, higher is faster
-        :param scroll_back_top: whether to scroll the page back to the top after scrolling to the bottom
-        """
-        current_y_pos = 0
-        bottom_y_pos:int = await self.script("document.body.scrollHeight")  # get bottom position
-        while current_y_pos < bottom_y_pos:  # scroll in steps until bottom reached
-            current_y_pos += scroll_length
-            await self.script(f"window.scrollTo(0, {current_y_pos})")  # scroll one step
-            await asyncio.sleep(scroll_length / scroll_speed)
-
-        if scroll_back_top:  # scroll back to top in same style
-            while current_y_pos > 0:
-                current_y_pos -= scroll_length
-                await self.script(f"window.scrollTo(0, {current_y_pos})")
-                await asyncio.sleep(scroll_length / scroll_speed / 2)  # double speed
-
     async def web_select(self, by: By, selector: str, selected_value:Any, *, timeout:Timeout = 5) -> Element:
         """
         Selects an <option/> of a <select/> HTML element.
@@ -259,19 +233,18 @@ class Scraper:
         :raises TimeoutError: if element could not be found within time
         :raises UnexpectedTagNameException: if element is not a <select> element
         """
-        await self.wait_for(lambda: self.web_check(by, selector, Is.CLICKABLE), timeout = timeout)
+        await self.wait_for(lambda: self.web_check(by, selector, Is.CLICKABLE), timeout=timeout)
         elem = await self.query(by, selector)
         await elem.apply(f"""
-            function (element) {{
-              for(let i=0; i < element.options.length; i++)
-                {{
-                  if(element.options[i].value == "{selected_value}") {{
-                    element.selectedIndex = i;
-                    element.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    break;
+            (element) => {{
+                for(let i=0; i < element.options.length; i++) {{
+                    if(element.options[i].value == "{selected_value}") {{
+                        element.selectedIndex = i;
+                        element.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        break;
+                    }}
                 }}
-              }}
-              throw new Error("Option with value {selected_value} not found.");
+                throw new Error("Option with value {selected_value} not found.");
             }}
         """)
         await self.sleep()

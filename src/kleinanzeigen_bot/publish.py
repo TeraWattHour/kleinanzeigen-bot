@@ -67,6 +67,7 @@ async def publish_ads(config: Config):
             print("ad published with id:", id)
         except Exception as e:
             print(e)
+
         
    
 
@@ -83,12 +84,13 @@ async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
     
     await __upload_images(scraper, ad, file_path)
 
-    await scraper.web_scroll_page_down()
-
     await scraper.detect_captcha()
 
     try:
-        await scraper.click(By.CSS_SELECTOR, "#pstad-submit")
+        submit_button = await scraper.query(By.CSS_SELECTOR, "#pstad-submit")
+        await submit_button.scroll_into_view()
+        await scraper.sleep(500, 1000)
+        await submit_button.click()
     except TimeoutError:
         # https://github.com/Second-Hand-Friends/kleinanzeigen-bot/issues/40
         await scraper.click(By.XPATH, "//fieldset[@id='postad-publish']//*[contains(., 'Anzeige aufgeben')]")
