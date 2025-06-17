@@ -7,11 +7,7 @@ from datetime import datetime, timedelta, timezone
 from gettext import gettext as _
 from typing import Any, Mapping, TypeVar
 
-from . import i18n
-
-# https://mypy.readthedocs.io/en/stable/generics.html#generic-functions
 T = TypeVar("T")
-
 
 def ensure(
         condition:Any | bool | Callable[[], bool],  # noqa: FBT001 Boolean-typed positional argument in function definition

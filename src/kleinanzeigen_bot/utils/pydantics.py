@@ -8,9 +8,6 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import InitErrorDetails
 from typing_extensions import Self
 
-from kleinanzeigen_bot.utils.i18n import pluralize
-
-
 class ContextualValidationError(ValidationError):
     context:Any
 
@@ -51,37 +48,38 @@ class ContextualModel(BaseModel):
 
 
 def format_validation_error(ex:ValidationError) -> str:
-    """
-    Turn a Pydantic ValidationError into the classic:
-      N validation errors for ModelName
-      field
-        message [type=code]
+    # """
+    # Turn a Pydantic ValidationError into the classic:
+    #   N validation errors for ModelName
+    #   field
+    #     message [type=code]
 
-    >>> from pydantic import BaseModel, ValidationError
-    >>> class M(BaseModel): x: int
-    >>> try:
-    ...     M(x="no-int")
-    ... except ValidationError as e:
-    ...     print(format_validation_error(e))
-    1 validation error for [M]:
-    - x: Input should be a valid integer, unable to parse string as an integer
-    """
-    errors = ex.errors(include_url = False, include_input = False, include_context = True)
-    ctx = ex.context if isinstance(ex, ContextualValidationError) and ex.context else ex.title
-    header = _("%s for [%s]:") % (pluralize("validation error", ex.error_count()), ctx)
-    lines = [header]
-    for err in errors:
-        loc = ".".join(str(p) for p in err["loc"])
-        msg_ctx = err.get("ctx")
-        code = err["type"]
-        msg_template = __get_message_template(code)
-        if msg_template:
-            msg = _(msg_template).format(**msg_ctx) if msg_ctx else msg_template
-            msg = msg.replace("' or '", _("' or '"))
-            lines.append(f"- {loc}: {msg}")
-        else:
-            lines.append(f"- {loc}: {err['msg']} [type={code}]")
-    return "\n".join(lines)
+    # >>> from pydantic import BaseModel, ValidationError
+    # >>> class M(BaseModel): x: int
+    # >>> try:
+    # ...     M(x="no-int")
+    # ... except ValidationError as e:
+    # ...     print(format_validation_error(e))
+    # 1 validation error for [M]:
+    # - x: Input should be a valid integer, unable to parse string as an integer
+    # """
+    # errors = ex.errors(include_url = False, include_input = False, include_context = True)
+    # ctx = ex.context if isinstance(ex, ContextualValidationError) and ex.context else ex.title
+    # header = _("%s for [%s]:") % ("validation error", ex.error_count()), ctx)
+    # lines = [header]
+    # for err in errors:
+    #     loc = ".".join(str(p) for p in err["loc"])
+    #     msg_ctx = err.get("ctx")
+    #     code = err["type"]
+    #     msg_template = __get_message_template(code)
+    #     if msg_template:
+    #         msg = _(msg_template).format(**msg_ctx) if msg_ctx else msg_template
+    #         msg = msg.replace("' or '", _("' or '"))
+    #         lines.append(f"- {loc}: {msg}")
+    #     else:
+    #         lines.append(f"- {loc}: {err['msg']} [type={code}]")
+    # return "\n".join(lines)
+    pass
 
 
 def __get_message_template(error_code:str) -> str | None:

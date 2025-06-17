@@ -46,15 +46,20 @@ async def publish_ads(config: Config):
     published_ads = await get_all_published_ads(scraper)
     published_ids = list(map(lambda ad: int(ad['id']), published_ads))
 
-    for file in ad_files:
+    working_tab = await browser.get(f"{URL}/p-anzeige-aufgeben-schritt2.html", new_tab=True)
+    scraper = Scraper(working_tab)
+
+    for (i, file) in enumerate(ad_files):
+        print(f"processing {i+1}/{len(ad_files)} ad")
         ad = load_ad(file)
         if ad.id is not None and ad.id in published_ids:
             print(f"skipping ad {ad.id} - already processed")
             continue
 
-        tab = await browser.get(f"{URL}/p-anzeige-aufgeben-schritt2.html", new_tab=True)
+        await scraper.goto(f"{URL}/p-anzeige-aufgeben-schritt2.html")
+
         try:
-            id = await publish_ad(tab, ad.to_ad(config.ad_defaults), file)
+            id = await publish_ad(scraper, ad.to_ad(config.ad_defaults), file)
             with open(file, 'w') as f:
                 ad.id = id
                 f.write(ad.model_dump_json())
@@ -62,24 +67,19 @@ async def publish_ads(config: Config):
             print("ad published with id:", id)
         except Exception as e:
             print(e)
-        await tab.close()
         
    
 
-async def publish_ad(tab: Tab, ad: Ad, file_path: str):
-    scraper = Scraper(tab)
+async def publish_ad(scraper: Scraper, ad: Ad, file_path: str):
+    await scraper.input(By.CSS_SELECTOR, "#postad-title", ad.title)
+    
+    await scraper.input(By.CSS_SELECTOR, "input#post-ad-frontend-price, input#micro-frontend-price, input#pstad-price", str(ad.price))
+    await scraper.web_select(By.CSS_SELECTOR, "#micro-frontend-price-type", "NEGOTIABLE")
 
-    await scraper.web_input(By.ID, "postad-title", ad.title)
-    
-    await scraper.web_input(By.CSS_SELECTOR, "input#post-ad-frontend-price, input#micro-frontend-price, input#pstad-price", str(ad.price))
-    await scraper.web_select(By.ID, "micro-frontend-price-type", "NEGOTIABLE")
-    await scraper.web_sleep()
-    
-    # shipping MUST be bellow the inputs since it relies on automatic category assignment based on the title
-    # which is only triggered after some interaction with the site, in this case price change
+    await __set_category(scraper, "210/223/ersatz_reparaturteile")
     await __set_shipping(scraper, ad)
 
-    await scraper.web_execute("document.querySelector('#pstad-descrptn').value = `" + ad.description.replace("`", "'") + "`")
+    await scraper.script("document.querySelector('#pstad-descrptn').value = `" + ad.description.replace("`", "'") + "`")
     
     await __upload_images(scraper, ad, file_path)
 
@@ -88,21 +88,21 @@ async def publish_ad(tab: Tab, ad: Ad, file_path: str):
     await scraper.detect_captcha()
 
     try:
-        await scraper.web_click(By.ID, "pstad-submit")
+        await scraper.click(By.CSS_SELECTOR, "#pstad-submit")
     except TimeoutError:
         # https://github.com/Second-Hand-Friends/kleinanzeigen-bot/issues/40
-        await scraper.web_click(By.XPATH, "//fieldset[@id='postad-publish']//*[contains(., 'Anzeige aufgeben')]")
-        await scraper.web_click(By.ID, "imprint-guidance-submit")
+        await scraper.click(By.XPATH, "//fieldset[@id='postad-publish']//*[contains(., 'Anzeige aufgeben')]")
+        await scraper.click(By.CSS_SELECTOR, "#imprint-guidance-submit")
 
     # no image question
     try:
         image_hint_xpath = '//*[contains(@class, "ModalDialog--Actions")]//button[contains(., "Ohne Bild veröffentlichen")]'
         if not ad.images and await scraper.web_check(By.XPATH, image_hint_xpath, Is.DISPLAYED):
-            await scraper.web_click(By.XPATH, image_hint_xpath)
+            await scraper.click(By.XPATH, image_hint_xpath)
     except TimeoutError:
         pass
 
-    await scraper.web_await(lambda: "p-anzeige-aufgeben-bestaetigung.html?adId=" in scraper.page.url, timeout = 20)
+    await scraper.wait_for(lambda: "p-anzeige-aufgeben-bestaetigung.html?adId=" in scraper.page.url, timeout = 20)
 
     # extract the ad id from the URL's query parameter
     current_url_query_params = urllib.parse.parse_qs(urllib.parse.urlparse(scraper.page.url).query)
@@ -112,31 +112,44 @@ async def publish_ad(tab: Tab, ad: Ad, file_path: str):
     try:
         approval_link_xpath = '//*[contains(@id, "not-completed")]//a[contains(@class, "to-my-ads-link")]'
         if await scraper.web_check(By.XPATH, approval_link_xpath, Is.DISPLAYED):
-            await scraper.web_click(By.XPATH, approval_link_xpath)
+            await scraper.click(By.XPATH, approval_link_xpath)
     except TimeoutError:
         pass 
 
     return ad_id
 
-async def __set_category(scraper: Scraper) -> None:
-    await scraper.web_click(By.ID, "pstad-descrptn")
+async def __set_category(scraper: Scraper, category: str) -> None:
+    await scraper.click(By.CSS_SELECTOR, "#pstad-descrptn")
 
     try:
-        await scraper.web_text(By.ID, "postad-category-path", timeout=10)
+        if await scraper.get_inner_text(By.CSS_SELECTOR, "#postad-category-path"):
+            return
     except TimeoutError:
-        raise Exception("unimplemented; manual category picker")
+        pass
+
+    if not category:
+        raise Exception("no category was supplied and category auto-detection failed")
+    
+    await scraper.sleep()  # workaround for https://github.com/Second-Hand-Friends/kleinanzeigen-bot/issues/39
+    await scraper.click(By.CSS_SELECTOR, "#pstad-lnk-chngeCtgry")
+    await scraper.query(By.CSS_SELECTOR, "#postad-step1-sbmt")
+
+    category_url = f"{URL}/p-kategorie-aendern.html#?path={category}"
+    await scraper.goto(category_url)
+    await scraper.click(By.XPATH, "//*[@id='postad-step1-sbmt']/button")
+
+
 
 async def __set_shipping(scraper: Scraper, ad_cfg:Ad) -> None:
     if ad_cfg.shipping_type == "PICKUP":
         try:
-            await scraper.web_click(By.XPATH,
-                '//*[contains(@class, "ShippingPickupSelector")]//label[contains(., "Nur Abholung")]/../input[@type="radio"]')
+            await scraper.click(By.XPATH, '//*[contains(@class, "ShippingPickupSelector")]//label[contains(., "Nur Abholung")]/../input[@type="radio"]')
         except TimeoutError as ex:
             print(ex)
             # LOG.debug(ex, exc_info = True)
     elif ad_cfg.shipping_options:
-        await scraper.web_click(By.XPATH, '//*[contains(@class, "SubSection")]//button[contains(@class, "SelectionButton")]')
-        await scraper.web_click(By.XPATH, '//*[contains(@class, "CarrierSelectionModal")]//button[contains(., "Andere Versandmethoden")]')
+        await scraper.click(By.XPATH, '//*[contains(@class, "SubSection")]//button[contains(@class, "SelectionButton")]')
+        await scraper.click(By.XPATH, '//*[contains(@class, "CarrierSelectionModal")]//button[contains(., "Andere Versandmethoden")]')
         await __set_shipping_options(scraper, ad_cfg)
     else:
         special_shipping_selector = '//select[contains(@id, ".versand_s")]'
@@ -148,11 +161,11 @@ async def __set_shipping(scraper: Scraper, ad_cfg:Ad) -> None:
             try:
                 # no options. only costs. Set custom shipping cost
                 if ad_cfg.shipping_costs is not None:
-                    await scraper.web_click(By.XPATH, '//*[contains(@class, "SubSection")]//button[contains(@class, "SelectionButton")]')
-                    await scraper.web_click(By.XPATH, '//*[contains(@class, "CarrierSelectionModal")]//button[contains(., "Andere Versandmethoden")]')
-                    await scraper.web_click(By.XPATH, '//*[contains(@id, "INDIVIDUAL") and contains(@data-testid, "Individueller Versand")]')
-                    await scraper.web_input(By.CSS_SELECTOR, '.IndividualShippingInput input[type="text"]', str.replace(str(ad_cfg.shipping_costs), ".", ","))
-                    await scraper.web_click(By.XPATH, '//dialog//button[contains(., "Fertig")]')
+                    await scraper.click(By.XPATH, '//*[contains(@class, "SubSection")]//button[contains(@class, "SelectionButton")]')
+                    await scraper.click(By.XPATH, '//*[contains(@class, "CarrierSelectionModal")]//button[contains(., "Andere Versandmethoden")]')
+                    await scraper.click(By.XPATH, '//*[contains(@id, "INDIVIDUAL") and contains(@data-testid, "Individueller Versand")]')
+                    await scraper.input(By.CSS_SELECTOR, '.IndividualShippingInput input[type="text"]', str.replace(str(ad_cfg.shipping_costs), ".", ","))
+                    await scraper.click(By.XPATH, '//dialog//button[contains(., "Fertig")]')
             except TimeoutError as ex:
                 raise TimeoutError("Unable to close shipping dialog!") from ex
 
@@ -184,7 +197,7 @@ async def __set_shipping_options(scraper: Scraper, ad_cfg:Ad) -> None:
         raise ValueError("You can only specify shipping options for one package size!") from ex
 
     try:
-        shipping_size_radio = await scraper.web_find(By.CSS_SELECTOR, f'.SingleSelectionItem--Main input[type=radio][data-testid="{shipping_size}"]')
+        shipping_size_radio = await scraper.query(By.CSS_SELECTOR, f'.SingleSelectionItem--Main input[type=radio][data-testid="{shipping_size}"]')
         shipping_size_radio_is_checked = hasattr(shipping_size_radio.attrs, "checked")
 
         if shipping_size_radio_is_checked:
@@ -194,14 +207,14 @@ async def __set_shipping_options(scraper: Scraper, ad_cfg:Ad) -> None:
             ]
             to_be_clicked_shipping_packages = unwanted_shipping_packages
         else:
-            await scraper.web_click(By.CSS_SELECTOR, f'.SingleSelectionItem--Main input[type=radio][data-testid="{shipping_size}"]')
+            await scraper.click(By.CSS_SELECTOR, f'.SingleSelectionItem--Main input[type=radio][data-testid="{shipping_size}"]')
             to_be_clicked_shipping_packages = list(shipping_packages)
 
-        await scraper.web_click(By.XPATH, '//dialog//button[contains(., "Weiter")]')
+        await scraper.click(By.XPATH, '//dialog//button[contains(., "Weiter")]')
 
         for shipping_package in to_be_clicked_shipping_packages:
             try:
-                await scraper.web_click(
+                await scraper.click(
                     By.XPATH,
                     f'//dialog//input[contains(@data-testid, "{shipping_package}")]')
             except TimeoutError as ex:
@@ -213,7 +226,7 @@ async def __set_shipping_options(scraper: Scraper, ad_cfg:Ad) -> None:
         # LOG.debug(ex, exc_info = True)
     try:
         # Click apply button
-        await scraper.web_click(By.XPATH, '//dialog//button[contains(., "Fertig")]')
+        await scraper.click(By.XPATH, '//dialog//button[contains(., "Fertig")]')
     except TimeoutError as ex:
         raise TimeoutError("Unable to close shipping dialog!") from ex
 
@@ -226,6 +239,6 @@ async def __upload_images(scraper: Scraper, ad_cfg: Ad, file_path: str) -> None:
     if not ad_cfg.images:
         return
 
-    image_upload: Element = await scraper.web_find(By.CSS_SELECTOR, "input[type=file]")
+    image_upload: Element = await scraper.query(By.CSS_SELECTOR, "input[type=file]")
     await image_upload.send_file(*map(lambda image: resolve_relative_path(file_path, image), ad_cfg.images))
-    await scraper.web_sleep()
+    await scraper.sleep()
