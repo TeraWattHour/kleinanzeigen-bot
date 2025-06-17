@@ -223,35 +223,3 @@ def parse_duration(text:str) -> timedelta:
         elif unit == "s":
             kwargs["seconds"] = kwargs.get("seconds", 0) + int(value)
     return timedelta(**kwargs)
-
-
-def format_timedelta(td:timedelta) -> str:
-    """
-    Formats a timedelta into a human-readable string using the pluralize utility.
-
-    >>> format_timedelta(timedelta(seconds=90))
-    '1 minute, 30 seconds'
-    >>> format_timedelta(timedelta(hours=1))
-    '1 hour'
-    >>> format_timedelta(timedelta(days=2, hours=5))
-    '2 days, 5 hours'
-    >>> format_timedelta(timedelta(0))
-    '0 seconds'
-    """
-    days = td.days
-    seconds = td.seconds
-    hours, remainder = divmod(seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-
-    parts = []
-
-    if days:
-        parts.append(i18n.pluralize("day", days))
-    if hours:
-        parts.append(i18n.pluralize("hour", hours))
-    if minutes:
-        parts.append(i18n.pluralize("minute", minutes))
-    if seconds:
-        parts.append(i18n.pluralize("second", seconds))
-
-    return ", ".join(parts) if parts else i18n.pluralize("second", 0)

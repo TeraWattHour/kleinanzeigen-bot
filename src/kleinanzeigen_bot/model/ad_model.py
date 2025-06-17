@@ -15,9 +15,7 @@ from kleinanzeigen_bot.utils import dicts
 from kleinanzeigen_bot.utils.misc import parse_datetime, parse_decimal
 from kleinanzeigen_bot.utils.pydantics import ContextualModel
 
-MAX_DESCRIPTION_LENGTH: Final[int] = 4000
-
-def _OPTIONAL() -> Any:
+def OPTIONAL():
     return Field(default = None)
 
 def _ISO_DATETIME(default:datetime | None = None) -> Any:
@@ -40,38 +38,32 @@ def _ISO_DATETIME(default:datetime | None = None) -> Any:
         },
     )
 
-
 def _validate_shipping_option_item(v:str) -> str:
     if not v.strip():
         raise ValueError("must be non-empty and non-blank")
     return v
 
-
 ShippingOption = Annotated[str, AfterValidator(_validate_shipping_option_item)]
 
 
 class AdPartial(ContextualModel):
-    active: bool | None = _OPTIONAL()
-    type: Literal["OFFER", "WANTED"] | None = _OPTIONAL()
-    title: str = Field(..., min_length = 10)
-    description: str
-    description_prefix: str | None = _OPTIONAL()
-    description_suffix: str | None = _OPTIONAL()
-    category:str |None= _OPTIONAL()
-    special_attributes:Dict[str, str] | None = _OPTIONAL()
-    price:int | None = _OPTIONAL()
-    price_type:Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"] | None = _OPTIONAL()
-    shipping_type:Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"] | None = _OPTIONAL()
-    shipping_costs:float | None = _OPTIONAL()
-    shipping_options:List[ShippingOption] | None = _OPTIONAL()
-    sell_directly:bool | None = _OPTIONAL()
-    images:List[str] | None = _OPTIONAL()
-    republication_interval:int | None = _OPTIONAL()
+    title: str = Field(..., min_length=10, max_length=65)
+    description: str = Field(..., max_length=4000)
+    images: List[str]
+    price: int
+    category: str | None = OPTIONAL()
+    
+    special_attributes: Dict[str, str] | None = OPTIONAL()
+    price_type: Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"] | None = OPTIONAL()
+    shipping_type: Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"] | None = OPTIONAL()
+    shipping_costs: float | None = OPTIONAL()
+    shipping_options: List[ShippingOption] | None = OPTIONAL()
+    sell_directly: bool | None = OPTIONAL()
+    republication_interval: int | None = OPTIONAL()
 
-    id:int | None = _OPTIONAL()
+    id:int | None = OPTIONAL()
     created_on:datetime | None = _ISO_DATETIME()
     updated_on:datetime | None = _ISO_DATETIME()
-    content_hash:str | None = _OPTIONAL()
 
     @field_validator("created_on", "updated_on", mode = "before")
     @classmethod
@@ -85,13 +77,6 @@ class AdPartial(ContextualModel):
             return None
         return round(parse_decimal(v), 2)
 
-    @field_validator("description")
-    @classmethod
-    def _validate_description_length(cls, v:str) -> str:
-        if len(v) > MAX_DESCRIPTION_LENGTH:
-            raise ValueError(f"description length exceeds {MAX_DESCRIPTION_LENGTH} characters")
-        return v
-
     @model_validator(mode = "before")
     @classmethod
     def _validate_price_and_price_type(cls, values:Dict[str, Any]) -> Dict[str, Any]:
@@ -102,40 +87,6 @@ class AdPartial(ContextualModel):
         if price_type == "FIXED" and price is None:
             raise ValueError("price is required when price_type is FIXED")
         return values
-
-    def update_content_hash(self) -> Self:
-        """Calculate and updates the content_hash value for user-modifiable fields of the ad."""
-
-        # 1) Dump to a plain dict, excluding the metadata fields:
-        raw = self.model_dump(
-            exclude = {"id", "created_on", "updated_on", "content_hash"},
-            exclude_none = True,
-            exclude_unset = True,
-        )
-
-        # 2) Recursively prune any empty containers:
-        def prune(obj:Any) -> Any:
-            if isinstance(obj, Mapping):
-                return {
-                    k: prune(v)
-                    for k, v in obj.items()
-                    # drop keys whose values are empty list/dict/set
-                    if not (isinstance(v, (Mapping, Sequence, set)) and not isinstance(v, (str, bytes)) and len(v) == 0)
-                }
-            if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes)):
-                return [
-                    prune(v)
-                    for v in obj
-                    if not (isinstance(v, (Mapping, Sequence, set)) and not isinstance(v, (str, bytes)) and len(v) == 0)
-                ]
-            return obj
-
-        pruned = prune(raw)
-
-        # 3) Produce a canonical JSON string and hash it:
-        json_string = json.dumps(pruned, sort_keys = True)
-        self.content_hash = hashlib.sha256(json_string.encode()).hexdigest()
-        return self
 
     def to_ad(self, ad_defaults: AdDefaults) -> Ad:
         """
@@ -157,8 +108,17 @@ class AdPartial(ContextualModel):
 
 # pyright: reportGeneralTypeIssues=false, reportIncompatibleVariableOverride=false
 class Ad(AdPartial):
-    description: str
+    category: str
     price_type: Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"]
     shipping_type: Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"]
-    sell_directly: bool
-    republication_interval: int
+    
+    special_attributes: Dict[str, str] | None = OPTIONAL()
+    shipping_costs: float | None = OPTIONAL()
+    shipping_options: List[ShippingOption] | None = OPTIONAL()
+    sell_directly: bool | None = OPTIONAL()
+    republication_interval: int | None = OPTIONAL()
+
+    id:int | None = OPTIONAL()
+    created_on:datetime | None = _ISO_DATETIME()
+    updated_on:datetime | None = _ISO_DATETIME()
+    

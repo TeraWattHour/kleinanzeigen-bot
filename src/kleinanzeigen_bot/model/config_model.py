@@ -2,84 +2,34 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-ArtifactOfProjectHomePage: https://github.com/Second-Hand-Friends/kleinanzeigen-bot/
 from __future__ import annotations
-
 import copy
-from typing import Annotated, Any, List, Literal
+from typing import Any, List, Literal
+from pydantic import Field
 
-from pydantic import AfterValidator, Field, model_validator
-from typing_extensions import deprecated
-
+from kleinanzeigen_bot.model.ad_model import OPTIONAL, ShippingOption
 from kleinanzeigen_bot.utils import dicts
-from kleinanzeigen_bot.utils.misc import get_attr
 from kleinanzeigen_bot.utils.pydantics import ContextualModel
 
-
-class ContactDefaults(ContextualModel):
-    name:str | None = None
-    street:str | None = None
-    zipcode:int | str | None = None
-    phone:str | None = None
-
-
-@deprecated("Use description_prefix/description_suffix instead")
-class DescriptionAffixes(ContextualModel):
-    prefix:str | None = None
-    suffix:str | None = None
-
-
 class AdDefaults(ContextualModel):
-    active:bool = True
-    type:Literal["OFFER", "WANTED"] = "OFFER"
-    description:DescriptionAffixes | None = None
-    description_prefix:str | None = Field(default = None, description = "prefix for the ad description")
-    description_suffix:str | None = Field(default = None, description = " suffix for the ad description")
-    price_type:Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"] = "NEGOTIABLE"
-    shipping_type:Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"] = "SHIPPING"
-    sell_directly:bool = Field(default = False, description = "requires shipping_type SHIPPING to take effect")
-    images:List[str] | None = Field(default = None)
-    contact:ContactDefaults = Field(default_factory = ContactDefaults)
-    republication_interval:int = 7
-
-    @model_validator(mode = "before")
-    @classmethod
-    def migrate_legacy_description(cls, values:dict[str, Any]) -> dict[str, Any]:
-        # Ensure flat prefix/suffix take precedence over deprecated nested "description"
-        description_prefix = values.get("description_prefix")
-        description_suffix = values.get("description_suffix")
-        legacy_prefix = get_attr(values, "description.prefix")
-        legacy_suffix = get_attr(values, "description.suffix")
-
-        if not description_prefix and legacy_prefix is not None:
-            values["description_prefix"] = legacy_prefix
-        if not description_suffix and legacy_suffix is not None:
-            values["description_suffix"] = legacy_suffix
-        return values
-
-class PublishingConfig(ContextualModel):
-    delete_old_ads:Literal["BEFORE_PUBLISH", "AFTER_PUBLISH", "NEVER"] | None = "AFTER_PUBLISH"
-    delete_old_ads_by_title:bool = Field(default = True, description = "only works if delete_old_ads is set to BEFORE_PUBLISH")
-
+    price_type: Literal["FIXED", "NEGOTIABLE", "GIVE_AWAY", "NOT_APPLICABLE"] = "NEGOTIABLE"
+    shipping_type: Literal["PICKUP", "SHIPPING", "NOT_APPLICABLE"] = "SHIPPING"
+    
+    category: str | None = OPTIONAL()
+    special_attributes: dict[str, str] | None = OPTIONAL()
+    shipping_costs: float | None = OPTIONAL()
+    shipping_options: List[ShippingOption] | None = OPTIONAL()
+    sell_directly: bool | None = OPTIONAL()
+    
 class Config(ContextualModel):
-    ad_files: List[str] = Field(
-        default=["./**/ad_*.{json,yml,yaml}"],
-        min_items=1,
-    ) # type: ignore
+    ad_files: List[str] = Field(default=["./**/ad_*.{json,yml,yaml}"], min_items=1) # type: ignore
 
     ad_defaults: AdDefaults = Field(
-        default_factory = AdDefaults,
-        description = "Default values for ads, can be overwritten in each ad configuration file"
+        default_factory=AdDefaults,
+        description="Default values for ads, can be overwritten in each ad configuration file"
     )
 
-    categories: dict[str, str] = Field(default_factory = dict, description = """
-additional name to category ID mappings, see default list at
-https://github.com/TeraWattHour/kleinanzeigen-bot/blob/main/src/kleinanzeigen_bot/resources/categories.json
-""")
-
-    publishing: PublishingConfig = Field(default_factory = PublishingConfig)
     browser_socket: str = Field(default="127.0.0.1:9222", description="remote debugging socket address to bind to, e.g. '127.0.0.1:9222'")
     username: str
 
     def with_values(self, values:dict[str, Any]) -> Config:
-        return Config.model_validate(
-            dicts.apply_defaults(copy.deepcopy(values), defaults = self.model_dump())
-        )
+        return Config.model_validate(dicts.apply_defaults(copy.deepcopy(values), defaults = self.model_dump()))
